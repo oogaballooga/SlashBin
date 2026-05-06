@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<robot name="smartbin_robot" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- 1. Include the physical body and wheels -->
+  <xacro:include filename="$(find smartbin_robot)/urdf/base_link.urdf.xacro" />
+  
+  <!-- 2. Include the motors and plugins (cmd_vel logic) -->
+  <xacro:include filename="$(find smartbin_robot)/urdf/gazebo_plugins.urdf.xacro" />   
+  <xacro:include filename="$(find smartbin_robot)/urdf/ros2_control.urdf.xacro" />
+
+  <!-- 3. Include the Sensors (Lidar, Camera, IMU) -->
+  <xacro:include filename="$(find smartbin_robot)/urdf/lidar.urdf.xacro" />
+  <xacro:include filename="$(find smartbin_robot)/urdf/camera.urdf.xacro" />
+  <xacro:include filename="$(find smartbin_robot)/urdf/imu.urdf.xacro" />
+
+  <!-- 4. Initialize the robot structure -->
+  <link name="base_footprint" />
+
+  <!-- This tag "spawns" the chassis and wheels defined in base_link.urdf.xacro -->
+  <xacro:base_link parent="base_footprint" xyz="0 0 0.0500" rpy="0 0 0" />
+
+</robot>

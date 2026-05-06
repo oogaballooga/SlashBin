@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- Include the wheel definition -->
+  <xacro:include filename="$(find smartbin_robot)/urdf/omni_wheel.urdf.xacro"/>
+
+  <xacro:macro name="base_link" params="parent xyz rpy">
+    <link name="base_link">
+      <visual>
+        <geometry>
+          <mesh filename="package://smartbin_robot/meshes/base_link.dae" />
+        </geometry>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://smartbin_robot/meshes/base_link.stl" />
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="3.0" />
+        <inertia 
+          ixx="0.9" ixy="0.0" ixz="0.0"
+          iyy="0.9" iyz="0.0"
+          izz="0.01"/>
+      </inertial>
+    </link>
+
+    <joint name="base_joint" type="fixed">
+      <parent link="${parent}" />
+      <child link="base_link" />
+      <origin xyz="${xyz}" rpy="${rpy}" />
+    </joint>
+
+    <xacro:omni_wheel parent="base_link" suffix="1" xyz="0.0927 0.0000 0.0145" rpy="-0.8040 1.5708 -0.8040"/>
+    <xacro:omni_wheel parent="base_link" suffix="2" xyz="-0.0464 0.0803 0.0145" rpy="-0.8040 1.5708 1.290"/>
+    <xacro:omni_wheel parent="base_link" suffix="3" xyz="-0.0464 -0.0803 0.0145" rpy="-0.8040 1.5708 -2.8984"/>
+
+    <!-- Sensors: Calls to the macros defined in main.urdf.xacro -->
+    <xacro:camera parent="base_link" suffix="1" xyz="0.1035 -0.0000 0.0630" rpy="0 0 0"/>
+    <xacro:lidar parent="base_link" suffix="1" xyz="0.1000 0.0000 0.1000" rpy="0 0 0"/>
+    <xacro:imu parent="base_link" suffix="1" xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:macro>
+</robot>

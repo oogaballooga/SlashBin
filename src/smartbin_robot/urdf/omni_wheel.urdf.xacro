@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:include filename="$(find smartbin_robot)/urdf/roller.urdf.xacro"/>
+
+  <xacro:macro name="omni_wheel" params="suffix parent xyz rpy">
+    <link name="omni_wheel_link_${suffix}">
+      <visual>
+        <geometry>
+          <mesh filename="package://smartbin_robot/meshes/omni_frame.stl" />
+        </geometry>
+        <material name="white">
+          <color rgba="1 1 1 1" />
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://smartbin_robot/meshes/omni_frame.stl" />
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.5" />
+        <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.005" />
+      </inertial>
+    </link>
+
+    <joint name="omni_wheel_joint_${suffix}" type="continuous">
+      <parent link="${parent}" />
+      <child link="omni_wheel_link_${suffix}" />
+      <origin xyz="${xyz}" rpy="${rpy}" />
+      <axis xyz="0 0 -1"/>
+    </joint>
+
+    <!-- Roller attachments: These define the physical rollers on the wheel hub -->
+    <xacro:roller parent="omni_wheel_link_${suffix}" suffix="${suffix}1" xyz="0.0000 -0.0210 0.0175" rpy="-1.570796327 -0.000000000 -1.570796327"/>
+    <xacro:roller parent="omni_wheel_link_${suffix}" suffix="${suffix}2" xyz="0.0182 0.0105 0.01755" rpy="-1.570796327 0.000000000 0.523598776"/>
+    <xacro:roller parent="omni_wheel_link_${suffix}" suffix="${suffix}3" xyz="-0.0182 0.0105 0.0175" rpy="-1.570796327 -0.000000000 2.617993878"/>
+    <xacro:roller parent="omni_wheel_link_${suffix}" suffix="${suffix}4" xyz="-0.0182 -0.0105 0.0025" rpy="-1.570796327 -0.000000000 -2.617993878"/>
+    <xacro:roller parent="omni_wheel_link_${suffix}" suffix="${suffix}5" xyz="0.0182 -0.0105 0.0025" rpy="-1.570796327 -0.000000000 -0.523598776"/>
+    <xacro:roller parent="omni_wheel_link_${suffix}" suffix="${suffix}6" xyz="-0.0000 0.0210 0.0025" rpy="1.570796327 0.000000000 -1.570796327"/>
+  </xacro:macro>
+</robot>
