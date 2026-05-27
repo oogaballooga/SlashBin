@@ -31,11 +31,39 @@
       <origin xyz="${xyz}" rpy="${rpy}" />
     </joint>
 
+    <!-- Trash Can Link -->
+    <link name="trashcan_link">
+      <visual>
+        <geometry>
+          <cylinder radius="0.09" length="0.3"/>
+        </geometry>
+        <material name="grey">
+          <color rgba="0.5 0.5 0.5 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder radius="0.09" length="0.3"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="1.0" />
+        <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="0.0" izz="0.01"/>
+      </inertial>
+    </link>
+
+    <joint name="trashcan_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="trashcan_link"/>
+      <origin xyz="-0.025 0 0.24" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Omni Wheels -->
     <xacro:omni_wheel parent="base_link" suffix="1" xyz="0.0927 0.0000 0.0145" rpy="-0.8040 1.5708 -0.8040"/>
     <xacro:omni_wheel parent="base_link" suffix="2" xyz="-0.0464 0.0803 0.0145" rpy="-0.8040 1.5708 1.290"/>
     <xacro:omni_wheel parent="base_link" suffix="3" xyz="-0.0464 -0.0803 0.0145" rpy="-0.8040 1.5708 -2.8984"/>
 
-    <!-- Sensors: Calls to the macros defined in main.urdf.xacro -->
+    <!-- Sensors -->
     <xacro:camera parent="base_link" suffix="1" xyz="0.1035 -0.0000 0.0630" rpy="0 0 0"/>
     <xacro:lidar parent="base_link" suffix="1" xyz="0.1000 0.0000 0.1000" rpy="0 0 0"/>
     <xacro:imu parent="base_link" suffix="1" xyz="0 0 0" rpy="0 0 0"/>

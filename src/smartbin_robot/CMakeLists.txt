@@ -39,13 +39,22 @@ ament_target_dependencies(kinematics_node
 
 install(TARGETS kinematics_node DESTINATION lib/${PROJECT_NAME})
 
+# Install configuration and support files to share
 install(
   DIRECTORY 
     config
     launch
     urdf
     meshes
+    worlds
   DESTINATION share/${PROJECT_NAME}
+)
+
+# Install executable scripts to lib
+install(
+  PROGRAMS
+    scripts/audio_trigger_node.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()

@@ -28,10 +28,12 @@ def generate_launch_description():
     )
 
     # Gazebo Sim
+    world_file = os.path.join(pkg_path, 'worlds', 'smartbin_world.sdf')
+    
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(
             get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
-        launch_arguments={'gz_args': '-r empty.sdf'}.items(),
+        launch_arguments={'gz_args': f'-r {world_file}'}.items(),
     )
 
     # Spawn Entity

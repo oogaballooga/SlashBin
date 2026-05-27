@@ -26,3 +26,8 @@ CMakeLists.txt.user
 *.a
 *.lib
 *.dll
+
+# Large models
+models/
+
+smartbin_env/
