@@ -21,7 +21,7 @@ using std::placeholders::_1;
 using namespace std;
 
 #define WHEEL_RADIUS        0.03
-#define ROBOT_RADIUS        0.088
+#define ROBOT_RADIUS        0.1025
 
 class OmniKinematics : public rclcpp::Node
 {
@@ -35,11 +35,12 @@ public:
 
     tM = init_transform_matrix(N);
     tMI = pseudo_inverse(tM);
-    tMI = Eigen::MatrixXd(tMI.block(0, 0, 2, tMI.cols()));
+    // REMOVED matrix truncation so we keep the 3rd row for Yaw (rotation) tracking!
     
-    wheel_joint_map_index["wheel1_joint"] = 0;
-    wheel_joint_map_index["wheel2_joint"] = 1;
-    wheel_joint_map_index["wheel3_joint"] = 2;
+    // CORRECTED: Match the joint names defined in your URDF exactly
+    wheel_joint_map_index["omni_wheel_joint_1"] = 0;
+    wheel_joint_map_index["omni_wheel_joint_2"] = 1;
+    wheel_joint_map_index["omni_wheel_joint_3"] = 2;
 
     for(int i = 0; i < N; i++){
       string topic_name = "wheel" + to_string(i+1) + "_controller/commands";
@@ -93,18 +94,25 @@ private:
               found_any = true;
           }
         }
-        if(!found_any) return;
+        if(!found_any) return; // If the names mismatched, it was silently dying right here!
         
         rclcpp::Time current_time = this->get_clock()->now();
         double dt = (current_time - last_time).seconds();
         last_time = current_time;
         
-        Eigen::Matrix2d rM;
-        rM << cos(yaw), -sin(yaw), sin(yaw), cos(yaw);
-        Eigen::MatrixXd dp = rM * tMI * w_vel * dt;
+        // UPGRADED: 3x3 Rotation matrix to track X, Y, and Yaw
+        Eigen::Matrix3d rM = Eigen::Matrix3d::Identity();
+        rM(0, 0) = cos(yaw);
+        rM(0, 1) = -sin(yaw);
+        rM(1, 0) = sin(yaw);
+        rM(1, 1) = cos(yaw);
+        
+        Eigen::VectorXd dp = rM * tMI * w_vel * dt;
         
         pos_x += dp(0);
         pos_y += dp(1);
+        yaw += dp(2); // Odometry now correctly tracks rotation
+        
         publish_odom(current_time);
   }
 

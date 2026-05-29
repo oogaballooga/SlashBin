@@ -44,9 +44,11 @@ install(
   DIRECTORY 
     config
     launch
+    map
+    models
     urdf
-    meshes
     worlds
+    meshes
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -54,6 +56,7 @@ install(
 install(
   PROGRAMS
     scripts/audio_trigger_node.py
+    scripts/human_detector_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

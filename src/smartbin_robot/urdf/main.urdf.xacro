@@ -16,7 +16,6 @@
   <!-- 4. Initialize the robot structure -->
   <link name="base_footprint" />
 
-  <!-- This tag "spawns" the chassis and wheels defined in base_link.urdf.xacro -->
   <xacro:base_link parent="base_footprint" xyz="0 0 0.0500" rpy="0 0 0" />
 
 </robot>

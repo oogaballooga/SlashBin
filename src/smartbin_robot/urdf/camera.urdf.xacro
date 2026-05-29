@@ -35,7 +35,7 @@
         <pose>-0.005 0 0 0 0 0</pose>
         <topic>depth</topic>
         <update_rate>10.0</update_rate>
-        <camera name="camera_${suffix}">
+        <camera name="depth_camera_internal_${suffix}">
           <camera_info_topic>depth/camera_info</camera_info_topic>
           <pose>0 0 0 0 0 0</pose>
           <horizontal_fov>1.5</horizontal_fov>
