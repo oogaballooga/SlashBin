@@ -24,8 +24,6 @@ class AudioTriggerNode(Node):
         self.state_pub = self.create_publisher(String, '/smartbin/robot_state', 10)
 
         # Subscriber: listens for state changes published by OTHER nodes
-        # (e.g. human_detector_node publishing IDLE when the robot reaches home)
-        # This keeps our local state in sync without needing a separate channel.
         self.state_sub = self.create_subscription(
             String, '/smartbin/robot_state', self.external_state_callback, 10
         )
@@ -37,7 +35,7 @@ class AudioTriggerNode(Node):
         self.current_state = "IDLE"
         self.get_logger().info(f"Audio system initialized. Current state: {self.current_state}")
 
-        # Set up Vosk model path
+        # Vosk model path
         model_path = os.path.expanduser(
             '~/smartbin_ws/src/smartbin_robot/models/vosk-model-small-en-us'
         )
@@ -69,10 +67,7 @@ class AudioTriggerNode(Node):
 
         self.timer = self.create_timer(0.1, self.process_audio)
 
-    # ------------------------------------------------------------------
     # External state sync
-    # ------------------------------------------------------------------
-
     def external_state_callback(self, msg):
         """
         Receives state updates published by other nodes (e.g. human_detector_node
@@ -86,10 +81,7 @@ class AudioTriggerNode(Node):
             )
             self.current_state = new_state
 
-    # ------------------------------------------------------------------
     # Audio processing
-    # ------------------------------------------------------------------
-
     def audio_callback(self, indata, frames, time, status):
         """Runs in a background thread; just enqueues raw audio bytes."""
         if status:
@@ -110,10 +102,7 @@ class AudioTriggerNode(Node):
                 if partial:
                     self.get_logger().info(f"Thinking: '{partial}'...")
 
-    # ------------------------------------------------------------------
     # State machine
-    # ------------------------------------------------------------------
-
     def parse_command(self, text):
         self.get_logger().info(f"Heard: '{text}'")
 
