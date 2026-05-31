@@ -19,9 +19,9 @@
       <inertial>
         <mass value="3.0" />
         <inertia 
-          ixx="0.9" ixy="0.0" ixz="0.0"
-          iyy="0.9" iyz="0.0"
-          izz="0.01"/>
+          ixx="0.02" ixy="0.0" ixz="0.0"
+          iyy="0.02" iyz="0.0"
+          izz="0.04"/>
       </inertial>
     </link>
 

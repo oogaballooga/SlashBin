@@ -13,8 +13,9 @@
         </material>
       </visual>
       <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://smartbin_robot/meshes/omni_frame.stl" />
+          <cylinder radius="0.03" length="0.015"/> 
         </geometry>
       </collision>
       <inertial>

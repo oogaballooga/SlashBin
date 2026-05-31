@@ -1,313 +1,315 @@
 #!/usr/bin/env python3
 import rclpy
-from rclpy.node import Node
-from rclpy.action import ActionClient
 import math
 import os
 import yaml
-
+import numpy as np
 import torch
 from functools import partial
-torch.load = partial(torch.load, weights_only=False)
 
+from rclpy.node import Node
+from rclpy.action import ActionClient
 from ultralytics import YOLO
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped, PointStamped, Twist
 from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
 from cv_bridge import CvBridge
-
 from tf2_ros import Buffer, TransformListener
 import tf2_geometry_msgs
-
 from ament_index_python.packages import get_package_share_directory
+import message_filters
 
+torch.load = partial(torch.load, weights_only=False)
+torch.serialization.add_safe_globals([dict, list, set, torch.nn.Module, torch.Tensor])
 
-SEARCH_SPIN_SPEED = 0.6  # rad/s while scanning
+SEARCH_SPIN_SPEED = 1.2
+# How long (seconds) to wait after cancelling the current goal before sending
+# the home goal. This lets the global costmap run ~3 update cycles at 5 Hz so
+# nearby obstacles (e.g. the human) are marked before the planner runs.
+COSTMAP_SETTLE_S  = 0.7
+HUMAN_STANDOFF_M  = 0.6
+MIN_CONFIDENCE       = 0.80
+DEPTH_SAMPLE_HALF    = 10
+# Number of consecutive frames a detection must appear in before we act on it.
+# Kills first-frame flukes and single-frame chair misdetections.
+CONFIRM_FRAMES_REQUIRED = 3
+
 
 class HumanDetectorNode(Node):
     def __init__(self):
         super().__init__('human_detector_node')
-        self.bridge = CvBridge()
+        self.bridge   = CvBridge()
+        pkg_share     = get_package_share_directory('smartbin_robot')
 
-        # YOLO model
-        torch.serialization.add_safe_globals([dict, list, set, torch.nn.Module, torch.Tensor])
-        pkg_share = get_package_share_directory('smartbin_robot')
-        model_path = os.path.join(pkg_share, 'models', 'yolov8n.pt')
-        self.model = YOLO(model_path)
+        self.model = YOLO(os.path.join(pkg_share, 'models', 'yolov8s.pt'))
+        # Warm up YOLO so the first real detection isn't a slow/unreliable
+        # lazily-initialised inference. A blank frame is enough to trigger
+        # CUDA kernel compilation without affecting any state.
+        self.get_logger().info("Warming up YOLO model...")
+        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+        self.model(dummy, classes=[0], verbose=False)
+        self.get_logger().info("YOLO warmup done.")
 
-        # Home pose - loaded from config/home_pose.yaml
-        home_pose_file = os.path.join(pkg_share, 'config', 'home_pose.yaml')
         try:
-            with open(home_pose_file, 'r') as f:
-                home_cfg = yaml.safe_load(f)
-            self.home_x   = float(home_cfg['home_pose']['x'])
-            self.home_y   = float(home_cfg['home_pose']['y'])
-            self.home_yaw = float(home_cfg['home_pose']['yaw'])
-            self.get_logger().info(
-                f"Home pose loaded: x={self.home_x}, y={self.home_y}, yaw={self.home_yaw}"
-            )
+            with open(os.path.join(pkg_share, 'config', 'home_pose.yaml'), 'r') as f:
+                cfg = yaml.safe_load(f)['home_pose']
+                self.home_pose = (float(cfg['x']), float(cfg['y']), float(cfg['yaw']))
         except Exception as e:
-            self.get_logger().error(f"Failed to load home_pose.yaml: {e}. Defaulting to origin.")
-            self.home_x = self.home_y = self.home_yaw = 0.0
+            self.get_logger().error(f"Home pose load failed: {e}. Defaulting to 0,0,0.")
+            self.home_pose = (0.0, 0.0, 0.0)
 
-        # Using the action client means we get a result callback when goal is reached
-        self._nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self._active_goal_handle = None   # Track so we can cancel on state change
+        self._nav_client          = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self._active_goal_handle  = None
+        self.current_state        = "IDLE"
+        self._human_goal_sent     = False
+        self._settle_timer        = None
+        self._detection_streak    = 0   # consecutive frames with a valid high-conf human
 
-        # State tracking
-        self.current_state = "IDLE"
-        self.target_published = False # Ensures we only send one human goal per SEARCH
+        self.fx        = None
+        self.cx_center = None
 
-        # Camera intrinsics
-        self.img_width = 640
-        self.img_height = 480
-        self.fov = 1.5 # radians
-        self.focal_length = (self.img_width / 2) / math.tan(self.fov / 2)
-        self.avg_human_height = 1.7  # metres
-
-        # TF2
-        self.tf_buffer = Buffer()
+        self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # Publishers & subscriptions
         self.state_pub   = self.create_publisher(String, '/smartbin/robot_state', 10)
-        self.cmd_vel_pub = self.create_publisher(Twist,  '/cmd_vel', 10)
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
-        self.create_subscription(String, '/smartbin/robot_state', self.state_callback, 10)
-        self.create_subscription(Image, '/camera', self.image_callback, 10)
+        self.create_subscription(String,      '/smartbin/robot_state', self.state_callback,       10)
+        self.create_subscription(CameraInfo,  '/camera_info',          self.camera_info_callback, 10)
+
+        rgb_sub   = message_filters.Subscriber(self, Image, '/camera')
+        depth_sub = message_filters.Subscriber(self, Image, '/depth')
+        self.sync = message_filters.ApproximateTimeSynchronizer(
+            [rgb_sub, depth_sub], queue_size=5, slop=0.05
+        )
+        self.sync.registerCallback(self.synced_image_callback)
 
         self.create_timer(0.1, self._spin_tick)
+        self.get_logger().info("Human Detector Node ready.")
 
-        self.get_logger().info("Human Detector Node ready. Waiting for SEARCH or GOHOME state...")
+    def camera_info_callback(self, msg):
+        self.fx        = msg.k[0]
+        self.cx_center = msg.k[2]
 
-    # State machine
     def state_callback(self, msg):
-        new_state = msg.data
-        if new_state == self.current_state:
+        if msg.data == self.current_state:
             return
- 
-        prev = self.current_state
-        self.current_state = new_state
-        self.get_logger().info(f"State: {prev} -> {new_state}")
- 
-        if new_state == "SEARCH":
-            self._human_goal_sent = False
-            self.get_logger().info(f"Spinning at {SEARCH_SPIN_SPEED} rad/s, scanning for humans...")
- 
-        elif new_state == "GOTARGET":
-            # Spinning stopped automatically because state != SEARCH;
-            # publish one explicit zero-vel so the robot doesn't coast
-            self._stop_spinning()
- 
-        elif new_state == "GOHOME":
-            self._stop_spinning()
-            # Cancel whatever Nav2 was doing before heading home
-            self._cancel_active_goal(then=self._go_home)
- 
-        elif new_state == "IDLE":
-            self._stop_spinning()
+        self.current_state = msg.data
+        self.get_logger().info(f"State transitioned to: {self.current_state}")
 
-    # Spin Logic (SEARCH state)
+        if self.current_state == "SEARCH":
+            self._human_goal_sent  = False
+            self._detection_streak = 0
+        elif self.current_state in ["GOTARGET", "IDLE"]:
+            self.cmd_vel_pub.publish(Twist())
+        elif self.current_state == "GOHOME":
+            self.cmd_vel_pub.publish(Twist())
+            # Cancel any active goal, then wait COSTMAP_SETTLE_S seconds before
+            # sending the home goal. This gives the global costmap time to mark
+            # the human (who is still standing nearby) so the planner routes
+            # around them instead of straight through them.
+            self._cancel_active_goal(then=self._deferred_go_home)
+
     def _spin_tick(self):
-        if self.current_state != "SEARCH":
-            return
-        twist = Twist()
-        twist.angular.z = SEARCH_SPIN_SPEED
-        self.cmd_vel_pub.publish(twist)
- 
-    def _stop_spinning(self):
-        self.cmd_vel_pub.publish(Twist())  # All-zero Twist
+        if self.current_state == "SEARCH":
+            t = Twist()
+            t.angular.z = SEARCH_SPIN_SPEED
+            self.cmd_vel_pub.publish(t)
 
-    # Human detection
-    def image_callback(self, msg):
+    def synced_image_callback(self, rgb_msg, depth_msg):
         if self.current_state != "SEARCH" or self._human_goal_sent:
             return
- 
-        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        results = self.model(cv_image, classes=[0], verbose=False)
- 
+        if self.fx is None:
+            return
+
+        try:
+            depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
+        except Exception as e:
+            self.get_logger().warn(f"Depth decode error: {e}")
+            return
+
+        cv_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
+        results  = self.model(cv_image, classes=[0], verbose=False)
+
         for r in results:
-            if len(r.boxes) == 0:
+            valid_boxes = [b for b in r.boxes if float(b.conf[0]) >= MIN_CONFIDENCE]
+            if not valid_boxes:
+                self._detection_streak = 0
                 continue
- 
-            box = r.boxes[0]
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
- 
-            center_x = (x1 + x2) / 2
-            box_height = y2 - y1
- 
-            distance = (self.avg_human_height * self.focal_length) / box_height
-            yaw_angle = ((self.img_width / 2) - center_x) * (self.fov / self.img_width)
-            lateral_offset = distance * math.tan(yaw_angle)
-            target_distance = max(0.0, distance - 1.0)
- 
-            self.get_logger().info(
-                f"Human detected! dist={distance:.2f} m  yaw={yaw_angle:.2f} rad"
+
+            # Pick the detection the model is most sure about, not the closest/largest
+            best_box = max(valid_boxes, key=lambda b: float(b.conf[0]))
+            x1, y1, x2, y2 = best_box.xyxy[0].tolist()
+            cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+
+            distance = self._depth_at(depth_image, cx, cy)
+            if not distance:
+                self._detection_streak = 0
+                continue
+
+            # Require CONFIRM_FRAMES_REQUIRED consecutive confident detections
+            # before committing — eliminates first-frame flukes
+            self._detection_streak += 1
+            self.get_logger().debug(
+                f"Human detection streak: {self._detection_streak}/{CONFIRM_FRAMES_REQUIRED} "
+                f"(conf={float(best_box.conf[0]):.2f}, dist={distance:.2f}m)"
             )
- 
-            # Mark sent BEFORE the async goal so a second camera frame can't
-            # sneak through while the action client is still connecting
+            if self._detection_streak < CONFIRM_FRAMES_REQUIRED:
+                continue
+
+            yaw_angle      = math.atan2((self.cx_center - cx), self.fx)
+            lateral_offset = distance * math.tan(yaw_angle)
+
+            self.get_logger().info(f"Target locked. Distance: {distance:.2f}m")
             self._human_goal_sent = True
             self._transition_to("GOTARGET")
-            self._send_human_goal(target_distance, lateral_offset, msg.header.stamp)
+            self._send_human_goal(distance, lateral_offset, rgb_msg.header.stamp)
             break
 
-    def _send_human_goal(self, x_dist, y_dist, timestamp):
-        point_camera = PointStamped()
-        point_camera.header.frame_id = 'camera_link_1'
-        point_camera.header.stamp    = timestamp
-        point_camera.point.x = x_dist
-        point_camera.point.y = y_dist
-        point_camera.point.z = 0.0
- 
+    def _depth_at(self, depth_image, cx, cy):
+        h, w = depth_image.shape[:2]
+        x0 = max(0, cx - DEPTH_SAMPLE_HALF)
+        x1 = min(w - 1, cx + DEPTH_SAMPLE_HALF)
+        y0 = max(0, cy - DEPTH_SAMPLE_HALF)
+        y1 = min(h - 1, cy + DEPTH_SAMPLE_HALF)
+
+        patch = depth_image[y0:y1+1, x0:x1+1].astype(np.float32)
+        valid = patch[np.isfinite(patch) & (patch > 0.0)]
+        return float(np.median(valid)) if valid.size >= 3 else None
+
+    def _send_human_goal(self, distance, lateral_offset, timestamp):
+        pt = PointStamped()
+        pt.header.frame_id = 'camera_link_1'
+        pt.header.stamp    = timestamp
+        pt.point.x = distance
+        pt.point.y = lateral_offset
+        pt.point.z = 0.0
+
         try:
-            transform = self.tf_buffer.lookup_transform(
-                'map', 'camera_link_1', rclpy.time.Time()
-            )
-            point_map = tf2_geometry_msgs.do_transform_point(point_camera, transform)
+            cam_to_map  = self.tf_buffer.lookup_transform('map', 'camera_link_1', rclpy.time.Time())
+            base_to_map = self.tf_buffer.lookup_transform('map', 'base_footprint', rclpy.time.Time())
+            human_map   = tf2_geometry_msgs.do_transform_point(pt, cam_to_map)
         except Exception as e:
-            self.get_logger().error(f"TF transform failed: {e} — dropping back to SEARCH.")
+            self.get_logger().error(f"TF failed: {e}")
             self._human_goal_sent = False
-            self._transition_to("SEARCH")
+            return self._transition_to("SEARCH")
+
+        dx = human_map.point.x - base_to_map.transform.translation.x
+        dy = human_map.point.y - base_to_map.transform.translation.y
+        approach_dist = math.hypot(dx, dy)
+
+        if approach_dist <= HUMAN_STANDOFF_M:
             return
- 
-        pose = PoseStamped()
-        pose.header.frame_id = 'map'
-        pose.header.stamp = self.get_clock().now().to_msg()
-        pose.pose.position.x = point_map.point.x
-        pose.pose.position.y = point_map.point.y
-        pose.pose.position.z = 0.0
-        pose.pose.orientation.w = 1.0 # Nav2 chooses approach heading
- 
+
+        goal_x = human_map.point.x - (dx / approach_dist) * HUMAN_STANDOFF_M
+        goal_y = human_map.point.y - (dy / approach_dist) * HUMAN_STANDOFF_M
+        yaw    = math.atan2(dy, dx)
+
+        self._send_nav_goal(goal_x, goal_y, yaw)
+
+    def _deferred_go_home(self):
+        """
+        Wait COSTMAP_SETTLE_S seconds for the global costmap to mark nearby
+        obstacles (the human still standing there) before asking the planner
+        for a home path. Uses a one-shot ROS timer so we stay non-blocking.
+        """
         self.get_logger().info(
-            f"Sending GOTARGET goal: x={pose.pose.position.x:.2f}, y={pose.pose.position.y:.2f}"
+            f"Waiting {COSTMAP_SETTLE_S}s for costmap to settle before planning home..."
         )
-        # For the human goal we don't need a strict result, the user dismisses
-        # with voice ("robot go home"). So we send via action but only log result.
-        self._send_nav_goal(pose, result_cb=self._on_human_goal_result)
- 
-    def _on_human_goal_result(self, status):
-        if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info("Reached human target.")
-        else:
-            self.get_logger().warn(f"Human navigation ended with status {status}.")
-        # No automatic state transition here, the user drives this with voice
- 
-    # GOHOME state
+        self._settle_timer = self.create_timer(COSTMAP_SETTLE_S, self._go_home_once)
+
+    def _go_home_once(self):
+        """One-shot callback — cancel the timer immediately, then navigate home."""
+        self._settle_timer.cancel()
+        self._settle_timer = None
+        self._go_home()
+
     def _go_home(self):
-        """Called only after any prior goal has been cancelled (or there was none)."""
-        if self.current_state != "GOHOME":
-            return  # State changed again while we were cancelling; do nothing
- 
+        self.get_logger().info("Heading to home pose...")
+        self._send_nav_goal(*self.home_pose, home=True)
+
+    def _send_nav_goal(self, x, y, yaw, home=False):
         pose = PoseStamped()
-        pose.header.frame_id = 'map'
-        pose.header.stamp = self.get_clock().now().to_msg()
-        pose.pose.position.x = self.home_x
-        pose.pose.position.y = self.home_y
-        pose.pose.position.z = 0.0
-        pose.pose.orientation.x = 0.0
-        pose.pose.orientation.y = 0.0
-        pose.pose.orientation.z = math.sin(self.home_yaw / 2.0)
-        pose.pose.orientation.w = math.cos(self.home_yaw / 2.0)
- 
-        self.get_logger().info(
-            f"Heading home: x={self.home_x}, y={self.home_y}, yaw={self.home_yaw:.3f} rad"
-        )
-        self._send_nav_goal(pose, result_cb=self._on_home_goal_result)
- 
-    def _on_home_goal_result(self, status):
-        """
-        Called by the action client when the GOHOME navigation finishes.
-        This is the correct place to transition to IDLE — only AFTER the
-        robot has physically arrived, not when the goal was merely sent.
-        """
-        if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info("Reached home. Transitioning to IDLE.")
-        else:
-            self.get_logger().warn(
-                f"Home navigation ended with status {status}. Resetting to IDLE anyway."
-            )
-        # Transition to IDLE regardless of success/failure so the system
-        # never gets stuck in GOHOME
-        self._transition_to("IDLE")
- 
-    # Nav2 action client helpers 
-    def _send_nav_goal(self, pose: PoseStamped, result_cb):
-        """
-        Send a NavigateToPose goal asynchronously.
-        result_cb(status: int) is called when the action finishes.
-        """
-        if not self._nav_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("navigate_to_pose action server not available!")
+        pose.header.frame_id    = 'map'
+        pose.header.stamp       = self.get_clock().now().to_msg()
+        pose.pose.position.x    = x
+        pose.pose.position.y    = y
+        pose.pose.orientation.z = math.sin(yaw / 2)
+        pose.pose.orientation.w = math.cos(yaw / 2)
+
+        self._nav_client.wait_for_server()
+        goal_future = self._nav_client.send_goal_async(NavigateToPose.Goal(pose=pose))
+        goal_future.add_done_callback(lambda f: self._on_goal_accepted(f, home=home))
+
+    def _on_goal_accepted(self, future, home=False):
+        result = future.result()
+        if not result.accepted:
+            self.get_logger().warn("Goal rejected by Nav2.")
+            self._on_goal_failed(home=home)
             return
- 
-        goal_msg      = NavigateToPose.Goal()
-        goal_msg.pose = pose
- 
-        send_future = self._nav_client.send_goal_async(goal_msg)
-        # Capture result_cb in a closure so we know which callback to fire
-        send_future.add_done_callback(
-            lambda f: self._on_goal_accepted(f, result_cb)
+        self._active_goal_handle = result
+        result.get_result_async().add_done_callback(
+            lambda f: self._on_nav_result(f, home=home)
         )
- 
-    def _on_goal_accepted(self, future, result_cb):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().error("Nav2 rejected the goal.")
-            return
- 
-        self._active_goal_handle = goal_handle
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(
-            lambda f: self._on_goal_result(f, result_cb)
-        )
- 
-    def _on_goal_result(self, future, result_cb):
+
+    def _on_nav_result(self, future, home=False):
         self._active_goal_handle = None
         status = future.result().status
-        result_cb(status)
- 
+
+        if status == GoalStatus.STATUS_SUCCEEDED:
+            if home:
+                self.get_logger().info("Reached home.")
+                self._transition_to("IDLE")
+            # Non-home success: robot is near the human, stay in GOTARGET and wait for dismiss
+        else:
+            # Nav2 aborted, timed out, or was cancelled by a recovery behaviour
+            status_name = {
+                GoalStatus.STATUS_ABORTED:   "ABORTED",
+                GoalStatus.STATUS_CANCELED:  "CANCELLED",
+            }.get(status, f"status={status}")
+            self.get_logger().warn(f"Navigation goal {status_name}.")
+            self._on_goal_failed(home=home)
+
+    def _on_goal_failed(self, home=False):
+        """
+        Called when Nav2 rejects, aborts, or cancels a goal.
+        Falls back to a recoverable state so voice commands can re-trigger.
+        - Human goal failed  → back to SEARCH (spin and try to re-acquire)
+        - Home goal failed   → back to IDLE so 'robot come here' works again
+        """
+        if home:
+            self.get_logger().warn("Failed to reach home — returning to IDLE.")
+            self._transition_to("IDLE")
+        else:
+            self.get_logger().warn("Failed to reach human — returning to SEARCH.")
+            self._human_goal_sent = False
+            self._transition_to("SEARCH")
+
     def _cancel_active_goal(self, then=None):
-        """
-        Cancel the currently active Nav2 goal if there is one, then call `then`.
-        If no goal is active, calls `then` immediately.
-        """
         if self._active_goal_handle is None:
             if then:
                 then()
             return
- 
-        self.get_logger().info("Cancelling active Nav2 goal...")
-        cancel_future = self._active_goal_handle.cancel_goal_async()
-        cancel_future.add_done_callback(
-            lambda f: self._on_goal_cancelled(f, then)
-        )
- 
-    def _on_goal_cancelled(self, future, then):
+        handle = self._active_goal_handle
         self._active_goal_handle = None
-        self.get_logger().info("Active goal cancelled.")
+        cancel_future = handle.cancel_goal_async()
         if then:
-            then()
- 
-    # Helpers 
+            cancel_future.add_done_callback(lambda _: then())
+
     def _transition_to(self, new_state: str):
-        """Publish a state change so all nodes stay in sync."""
         self.current_state = new_state
-        msg      = String()
-        msg.data = new_state
-        self.state_pub.publish(msg)
-        self.get_logger().info(f"Published state: {new_state}")
- 
- 
+        self.state_pub.publish(String(data=new_state))
+
+
 def main(args=None):
     rclpy.init(args=args)
     node = HumanDetectorNode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
- 
- 
+
+
 if __name__ == '__main__':
     main()
