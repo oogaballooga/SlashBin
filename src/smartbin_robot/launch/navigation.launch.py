@@ -8,8 +8,8 @@ def generate_launch_description():
     pkg_path = get_package_share_directory('smartbin_robot')
     nav2_bringup_share = get_package_share_directory('nav2_bringup')
 
-    # Path to map and updated custom parameters
-    map_yaml_file = os.path.join(pkg_path, 'map', 'kitchen_map.yaml')
+    # Path to map and custom parameters
+    map_yaml_file = os.path.join(pkg_path, 'map', 'smartbin_world.yaml')
     nav2_params_file = os.path.join(pkg_path, 'config', 'nav2_params.yaml')
 
     return LaunchDescription([

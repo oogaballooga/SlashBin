@@ -35,7 +35,14 @@ def generate_launch_description():
         package='ros_gz_sim',
         executable='create',
         output='screen',
-        arguments=['-topic', 'robot_description', '-name', 'smartbin_robot'],
+        arguments=[
+            '-topic', 'robot_description', 
+            '-name', 'smartbin_robot',
+            '-x', '0.0',
+            '-y', '0.0',
+            '-z', '0.01',
+            '-Y', '0.0'
+            ],
     )
 
     bridge_params = os.path.join(pkg_path, 'config', 'gz_bridge.yaml')

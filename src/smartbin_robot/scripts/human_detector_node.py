@@ -25,28 +25,24 @@ torch.load = partial(torch.load, weights_only=False)
 torch.serialization.add_safe_globals([dict, list, set, torch.nn.Module, torch.Tensor])
 
 SEARCH_SPIN_SPEED = 1.2
-# How long (seconds) to wait after cancelling the current goal before sending
-# the home goal. This lets the global costmap run ~3 update cycles at 5 Hz so
-# nearby obstacles (e.g. the human) are marked before the planner runs.
-COSTMAP_SETTLE_S  = 0.7
-HUMAN_STANDOFF_M  = 0.6
-MIN_CONFIDENCE       = 0.80
-DEPTH_SAMPLE_HALF    = 10
+# How long (in seconds) to wait after cancelling the current goal before sending the home goal
+COSTMAP_SETTLE_S = 0.7
+HUMAN_STANDOFF_M = 0.3
+MIN_CONFIDENCE = 0.80
+DEPTH_SAMPLE_HALF = 10
 # Number of consecutive frames a detection must appear in before we act on it.
-# Kills first-frame flukes and single-frame chair misdetections.
+# Kills first-frame flukes and single-frame misdetections.
 CONFIRM_FRAMES_REQUIRED = 3
 
 
 class HumanDetectorNode(Node):
     def __init__(self):
         super().__init__('human_detector_node')
-        self.bridge   = CvBridge()
-        pkg_share     = get_package_share_directory('smartbin_robot')
+        self.bridge = CvBridge()
+        pkg_share = get_package_share_directory('smartbin_robot')
 
         self.model = YOLO(os.path.join(pkg_share, 'models', 'yolov8s.pt'))
-        # Warm up YOLO so the first real detection isn't a slow/unreliable
-        # lazily-initialised inference. A blank frame is enough to trigger
-        # CUDA kernel compilation without affecting any state.
+        # Warm up YOLO so the first real detection isn't slow/unreliable
         self.get_logger().info("Warming up YOLO model...")
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
         self.model(dummy, classes=[0], verbose=False)
@@ -60,26 +56,26 @@ class HumanDetectorNode(Node):
             self.get_logger().error(f"Home pose load failed: {e}. Defaulting to 0,0,0.")
             self.home_pose = (0.0, 0.0, 0.0)
 
-        self._nav_client          = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self._active_goal_handle  = None
-        self.current_state        = "IDLE"
-        self._human_goal_sent     = False
-        self._settle_timer        = None
-        self._detection_streak    = 0   # consecutive frames with a valid high-conf human
+        self._nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+        self._active_goal_handle = None
+        self.current_state = "IDLE"
+        self._human_goal_sent = False
+        self._settle_timer = None
+        self._detection_streak = 0 # consecutive frames with a valid high-confidence human
 
-        self.fx        = None
+        self.fx = None
         self.cx_center = None
 
-        self.tf_buffer   = Buffer()
+        self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.state_pub   = self.create_publisher(String, '/smartbin/robot_state', 10)
+        self.state_pub = self.create_publisher(String, '/smartbin/robot_state', 10)
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
-        self.create_subscription(String,      '/smartbin/robot_state', self.state_callback,       10)
-        self.create_subscription(CameraInfo,  '/camera_info',          self.camera_info_callback, 10)
+        self.create_subscription(String, '/smartbin/robot_state', self.state_callback, 10)
+        self.create_subscription(CameraInfo, '/camera_info', self.camera_info_callback, 10)
 
-        rgb_sub   = message_filters.Subscriber(self, Image, '/camera')
+        rgb_sub = message_filters.Subscriber(self, Image, '/camera')
         depth_sub = message_filters.Subscriber(self, Image, '/depth')
         self.sync = message_filters.ApproximateTimeSynchronizer(
             [rgb_sub, depth_sub], queue_size=5, slop=0.05
@@ -90,7 +86,7 @@ class HumanDetectorNode(Node):
         self.get_logger().info("Human Detector Node ready.")
 
     def camera_info_callback(self, msg):
-        self.fx        = msg.k[0]
+        self.fx = msg.k[0]
         self.cx_center = msg.k[2]
 
     def state_callback(self, msg):
@@ -100,16 +96,14 @@ class HumanDetectorNode(Node):
         self.get_logger().info(f"State transitioned to: {self.current_state}")
 
         if self.current_state == "SEARCH":
-            self._human_goal_sent  = False
+            self._human_goal_sent = False
             self._detection_streak = 0
         elif self.current_state in ["GOTARGET", "IDLE"]:
             self.cmd_vel_pub.publish(Twist())
         elif self.current_state == "GOHOME":
             self.cmd_vel_pub.publish(Twist())
             # Cancel any active goal, then wait COSTMAP_SETTLE_S seconds before
-            # sending the home goal. This gives the global costmap time to mark
-            # the human (who is still standing nearby) so the planner routes
-            # around them instead of straight through them.
+            # sending the home goal.
             self._cancel_active_goal(then=self._deferred_go_home)
 
     def _spin_tick(self):
@@ -131,7 +125,7 @@ class HumanDetectorNode(Node):
             return
 
         cv_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
-        results  = self.model(cv_image, classes=[0], verbose=False)
+        results = self.model(cv_image, classes=[0], verbose=False)
 
         for r in results:
             valid_boxes = [b for b in r.boxes if float(b.conf[0]) >= MIN_CONFIDENCE]
@@ -139,7 +133,7 @@ class HumanDetectorNode(Node):
                 self._detection_streak = 0
                 continue
 
-            # Pick the detection the model is most sure about, not the closest/largest
+            # Pick the detection the model is most sure about
             best_box = max(valid_boxes, key=lambda b: float(b.conf[0]))
             x1, y1, x2, y2 = best_box.xyxy[0].tolist()
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
@@ -150,7 +144,7 @@ class HumanDetectorNode(Node):
                 continue
 
             # Require CONFIRM_FRAMES_REQUIRED consecutive confident detections
-            # before committing — eliminates first-frame flukes
+            # before committing, this eliminates first-frame flukes
             self._detection_streak += 1
             self.get_logger().debug(
                 f"Human detection streak: {self._detection_streak}/{CONFIRM_FRAMES_REQUIRED} "
@@ -159,7 +153,7 @@ class HumanDetectorNode(Node):
             if self._detection_streak < CONFIRM_FRAMES_REQUIRED:
                 continue
 
-            yaw_angle      = math.atan2((self.cx_center - cx), self.fx)
+            yaw_angle = math.atan2((self.cx_center - cx), self.fx)
             lateral_offset = distance * math.tan(yaw_angle)
 
             self.get_logger().info(f"Target locked. Distance: {distance:.2f}m")
@@ -182,15 +176,15 @@ class HumanDetectorNode(Node):
     def _send_human_goal(self, distance, lateral_offset, timestamp):
         pt = PointStamped()
         pt.header.frame_id = 'camera_link_1'
-        pt.header.stamp    = timestamp
+        pt.header.stamp = timestamp
         pt.point.x = distance
         pt.point.y = lateral_offset
         pt.point.z = 0.0
 
         try:
-            cam_to_map  = self.tf_buffer.lookup_transform('map', 'camera_link_1', rclpy.time.Time())
+            cam_to_map = self.tf_buffer.lookup_transform('map', 'camera_link_1', rclpy.time.Time())
             base_to_map = self.tf_buffer.lookup_transform('map', 'base_footprint', rclpy.time.Time())
-            human_map   = tf2_geometry_msgs.do_transform_point(pt, cam_to_map)
+            human_map = tf2_geometry_msgs.do_transform_point(pt, cam_to_map)
         except Exception as e:
             self.get_logger().error(f"TF failed: {e}")
             self._human_goal_sent = False
@@ -205,23 +199,24 @@ class HumanDetectorNode(Node):
 
         goal_x = human_map.point.x - (dx / approach_dist) * HUMAN_STANDOFF_M
         goal_y = human_map.point.y - (dy / approach_dist) * HUMAN_STANDOFF_M
-        yaw    = math.atan2(dy, dx)
+        yaw = math.atan2(dy, dx)
 
         self._send_nav_goal(goal_x, goal_y, yaw)
 
+        self.get_logger().info(
+        f"Human map pos: ({human_map.point.x:.2f}, {human_map.point.y:.2f}), "
+        f"approach_dist={approach_dist:.2f}, "
+        f"goal: ({goal_x:.2f}, {goal_y:.2f})"
+    )
+
     def _deferred_go_home(self):
-        """
-        Wait COSTMAP_SETTLE_S seconds for the global costmap to mark nearby
-        obstacles (the human still standing there) before asking the planner
-        for a home path. Uses a one-shot ROS timer so we stay non-blocking.
-        """
         self.get_logger().info(
             f"Waiting {COSTMAP_SETTLE_S}s for costmap to settle before planning home..."
         )
         self._settle_timer = self.create_timer(COSTMAP_SETTLE_S, self._go_home_once)
 
     def _go_home_once(self):
-        """One-shot callback — cancel the timer immediately, then navigate home."""
+        """One-shot callback; cancel the timer immediately, then navigate home."""
         self._settle_timer.cancel()
         self._settle_timer = None
         self._go_home()
@@ -232,10 +227,10 @@ class HumanDetectorNode(Node):
 
     def _send_nav_goal(self, x, y, yaw, home=False):
         pose = PoseStamped()
-        pose.header.frame_id    = 'map'
-        pose.header.stamp       = self.get_clock().now().to_msg()
-        pose.pose.position.x    = x
-        pose.pose.position.y    = y
+        pose.header.frame_id = 'map'
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = x
+        pose.pose.position.y = y
         pose.pose.orientation.z = math.sin(yaw / 2)
         pose.pose.orientation.w = math.cos(yaw / 2)
 
@@ -266,8 +261,8 @@ class HumanDetectorNode(Node):
         else:
             # Nav2 aborted, timed out, or was cancelled by a recovery behaviour
             status_name = {
-                GoalStatus.STATUS_ABORTED:   "ABORTED",
-                GoalStatus.STATUS_CANCELED:  "CANCELLED",
+                GoalStatus.STATUS_ABORTED: "ABORTED",
+                GoalStatus.STATUS_CANCELED: "CANCELLED",
             }.get(status, f"status={status}")
             self.get_logger().warn(f"Navigation goal {status_name}.")
             self._on_goal_failed(home=home)
@@ -276,8 +271,8 @@ class HumanDetectorNode(Node):
         """
         Called when Nav2 rejects, aborts, or cancels a goal.
         Falls back to a recoverable state so voice commands can re-trigger.
-        - Human goal failed  → back to SEARCH (spin and try to re-acquire)
-        - Home goal failed   → back to IDLE so 'robot come here' works again
+        - Human goal failed → back to SEARCH (spin and try to re-acquire)
+        - Home goal failed → back to IDLE so 'robot come here' works again
         """
         if home:
             self.get_logger().warn("Failed to reach home — returning to IDLE.")

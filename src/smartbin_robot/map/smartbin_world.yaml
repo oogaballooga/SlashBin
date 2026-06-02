@@ -1,7 +1,7 @@
-image: kitchen_map.pgm
+image: smartbin_world.pgm
 mode: trinary
 resolution: 0.050
-origin: [-3.712, -3.718, 0]
+origin: [-3.760, -3.699, 0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.196

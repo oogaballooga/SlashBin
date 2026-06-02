@@ -25,7 +25,7 @@
         <linear>0.01</linear>
         <quadratic>0.001</quadratic>
       </attenuation>
-      <direction>-0.5 0.1 -0.9</direction>
+      <direction>0.5 0.1 -0.9</direction>
     </light>
 
     <model name="ground_plane">
@@ -69,22 +69,58 @@
       </link>
     </model>
 
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri>
-      <name>obstacle_chair_1</name>
-      <pose>2.0 -1.0 0 0 0 160</pose>
-    </include>
+    <model name="countertops">
+      <static>true</static>
+      <link name="north_countertop">
+        <pose>2.25 3.0 0.5 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>3 1.5 1</size></box></geometry></collision>
+        <visual name="visual">
+        <geometry><box><size>3 1.5 1</size></box></geometry>
+          <material>
+            <ambient>0.4 0.4 0.4 1</ambient>
+            <diffuse>0.4 0.4 0.4 1</diffuse>
+            <specular>0.4 0.4 0.4 1</specular>
+          </material>
+        </visual>
+      </link>
+      <link name="east_countertop">
+        <pose>3.125 1 0.5 0 0 1.57</pose>
+        <collision name="collision"><geometry><box><size>3 1.25 1</size></box></geometry></collision>
+        <visual name="visual">
+        <geometry><box><size>3 1.25 1</size></box></geometry>
+          <material>
+            <ambient>0.4 0.4 0.4 1</ambient>
+            <diffuse>0.4 0.4 0.4 1</diffuse>
+            <specular>0.4 0.4 0.4 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
 
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Chair</uri>
-      <name>obstacle_chair_2</name>
-      <pose>1.0 3.0 0 0 0 45</pose>
-    </include>
+    <model name="home_position">
+      <static>true</static>
+      <pose>0 0 0.001 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>0.001</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.0 0.8 0.0 1</ambient>
+            <diffuse>0.0 0.8 0.0 1</diffuse>
+            <specular>0.0 0.8 0.0 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
 
     <include>
       <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Standing person</uri>
       <name>human_target</name>
-      <pose>3.0 1.0 0 0 0 -1.57</pose>
+      <pose>2.0 2.0 0 0 0 3.14</pose>
     </include>
 
   </world>

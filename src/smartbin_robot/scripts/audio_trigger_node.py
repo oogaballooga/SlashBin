@@ -11,16 +11,14 @@ from std_msgs.msg import String
 import sounddevice as sd
 import vosk
 
-WAKE_PHRASE    = "robot come here"
+WAKE_PHRASE = "robot come here"
 DISMISS_PHRASE = "robot go home"
 
 # Audeze Maxwell (USB) only exposes 48kHz. Vosk expects 16kHz.
-# We capture at 48kHz and downsample by factor 3 before feeding Vosk.
-CAPTURE_RATE   = 48000
-VOSK_RATE      = 16000
-DOWNSAMPLE     = CAPTURE_RATE // VOSK_RATE   # = 3
-
-# At 48kHz, 12000 frames = 250ms of audio. After 3x downsample → 4000 frames at 16kHz.
+# Capture at 48kHz and downsample by factor 3 before feeding Vosk.
+CAPTURE_RATE = 48000
+VOSK_RATE = 16000
+DOWNSAMPLE = CAPTURE_RATE // VOSK_RATE # = 3
 BLOCKSIZE_CAPTURE = 12000
 
 # How long to ignore new voice commands after one fires, in seconds.
@@ -35,7 +33,7 @@ class AudioTriggerNode(Node):
     def __init__(self):
         super().__init__('audio_trigger_node')
 
-        self.wake_phrase    = WAKE_PHRASE
+        self.wake_phrase = WAKE_PHRASE
         self.dismiss_phrase = DISMISS_PHRASE
 
         self.state_pub = self.create_publisher(String, '/smartbin/robot_state', 10)
@@ -43,9 +41,9 @@ class AudioTriggerNode(Node):
             String, '/smartbin/robot_state', self.external_state_callback, 10
         )
 
-        self.audio_queue       = queue.Queue()
-        self.current_state     = "IDLE"
-        self._last_command_t   = 0.0  # wall-clock time of the last fired command
+        self.audio_queue = queue.Queue()
+        self.current_state = "IDLE"
+        self._last_command_t = 0.0 # wall-clock time of the last fired command
 
         self.get_logger().info(f"Audio system initialized. State: {self.current_state}")
 
@@ -59,9 +57,8 @@ class AudioTriggerNode(Node):
         self.model = vosk.Model(model_path)
 
         self.device_index = 0
-        self.recognizer   = vosk.KaldiRecognizer(self.model, VOSK_RATE)
+        self.recognizer = vosk.KaldiRecognizer(self.model, VOSK_RATE)
 
-        # Capture at 48kHz (the only rate the Maxwell supports), downsample to 16kHz in callback
         self.stream = sd.RawInputStream(
             samplerate=CAPTURE_RATE,
             blocksize=BLOCKSIZE_CAPTURE,
@@ -101,7 +98,7 @@ class AudioTriggerNode(Node):
             processed += 1
             if self.recognizer.AcceptWaveform(data):
                 result = json.loads(self.recognizer.Result())
-                text   = result.get("text", "").strip()
+                text = result.get("text", "").strip()
                 if text:
                     self.parse_command(text)
             else:
@@ -139,7 +136,7 @@ class AudioTriggerNode(Node):
                 self.get_logger().info(f"Ignored wake phrase — in '{self.current_state}' state.")
 
         elif self.dismiss_phrase in text:
-            # Allow from any active state — always a valid escape
+            # Allow from any active state, always a valid escape
             if self.current_state != "IDLE":
                 self._last_command_t = now
                 self._transition_to("GOHOME")
@@ -149,7 +146,7 @@ class AudioTriggerNode(Node):
     def _transition_to(self, new_state: str):
         self.get_logger().info(f"State transition: {self.current_state} -> {new_state}")
         self.current_state = new_state
-        msg      = String()
+        msg = String()
         msg.data = new_state
         self.state_pub.publish(msg)
 

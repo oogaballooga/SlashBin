@@ -172,7 +172,7 @@
               <color sid="emission">0 0 0 1</color>
             </emission>
             <diffuse>
-              <color sid="diffuse">0.701961 0.701961 0.701961 1</color>
+              <color sid="diffuse">0.34902 0.34902 0.34902 1</color>
             </diffuse>
             <index_of_refraction>
               <float sid="ior">1.45</float>
@@ -189,7 +189,7 @@
               <color sid="emission">0 0 0 1</color>
             </emission>
             <diffuse>
-              <color sid="diffuse">0.854902 0.34902 0.34902 1</color>
+              <color sid="diffuse">0.701961 0.701961 0.701961 1</color>
             </diffuse>
             <index_of_refraction>
               <float sid="ior">1.45</float>
