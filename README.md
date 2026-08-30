@@ -31,16 +31,14 @@ The project combines voice recognition, computer vision, motion control, and aut
 ## Demo videos
 
 <p align="center">
-  <a href="media/slashbin_final_demo.mp4">
+  <a href="https://oscar-eriksen.vercel.app/projectDocs/SlashBin/slashbin_final_demo.mp4">
     <img src="media/slashbin_final_demo.gif" alt="Animated preview of SlashBin navigating in its Gazebo environment" width="640" />
   </a>
 </p>
 
 <p align="center"><em>Click the preview to watch the full final demo.</em></p>
 
-| Final demo | Terminal walkthrough | Navigation debugging |
-| --- | --- | --- |
-| [▶ Watch the full demo](media/slashbin_final_demo.mp4) | [▶ Watch the terminal walkthrough](media/slashbin_terminals.mp4) | [▶ Watch navigation debugging](media/nav_debugging.mp4) |
+[▶ Watch the full demo](https://oscar-eriksen.vercel.app/projectDocs/SlashBin/slashbin_final_demo.mp4)
 
 ## System overview
 
